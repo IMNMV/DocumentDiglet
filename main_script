@@ -196,7 +196,7 @@ def search_command(query):
     return "\n".join(matches)
 
 def start_mongodb():
-    mongo_process = subprocess.Popen(['mongod', '--dbpath', 'mongodb-data/', '--port', '27018'])
+    mongo_process = subprocess.Popen(['mongod', '--dbpath', 'mongodb-data/', '--port', '#####'])
     # You can customize the command based on your MongoDB installation and configuration
     return mongo_process
 
