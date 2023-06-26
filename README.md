@@ -1,7 +1,6 @@
 # DocumentDiglet
 
-Project: Offline Semantic Document Search Aka Document Diglet
-Goal
+Project: Offline Semantic Document Search 
 
 This project aims to create an efficient, offline way to semantically search documents. It offers a streamlined approach to make any dynamic repository easily accessible to team members, surpassing the capabilities of simple keyword search functionalities like Ctrl+F or an FAQ.
 
