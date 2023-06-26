@@ -1,0 +1,164 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jun 24 11:56:10 2023
+
+@author: nyk
+"""
+
+
+
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLineEdit, QTextEdit, QLabel, QWidget
+from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtGui import QPixmap
+import sys
+
+# Import your script here
+import DocumentDiglet_NoInterpy_V5
+
+print("Script imported successfully")
+
+class Worker(QThread):
+    result_ready = pyqtSignal(object)
+
+    def __init__(self, func, *args, **kwargs):
+        super().__init__()
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        result = self.func(*self.args, **self.kwargs)
+        self.result_ready.emit(result)
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+
+        self.mongo_process = None
+
+        self.setWindowTitle('Document Diglet')
+
+        self.init_ui()
+
+    def init_ui(self):
+        print("Initializing UI")
+
+        # Central widget
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+
+        # Layout
+        self.layout = QVBoxLayout()
+        self.central_widget.setLayout(self.layout)
+
+        # Logo
+        logo_label = QLabel()
+        pixmap = QPixmap('/Users/nyk/Desktop/diglet.png') 
+        scaled_pixmap = pixmap.scaled(30, 30, Qt.AspectRatioMode.KeepAspectRatio) 
+        logo_label.setPixmap(scaled_pixmap)
+        logo_label.setAlignment(Qt.AlignCenter)
+
+        # Widgets
+        self.input_line = QLineEdit()
+        self.response_text = QTextEdit()
+        self.response_text.setReadOnly(True)
+        
+        self.ask_button = QPushButton('Dig')
+        self.reveal_button = QPushButton('Reveal')
+        self.eliminate_button = QPushButton('Eliminate')
+        self.update_button = QPushButton('Update')
+        self.search_button = QPushButton('Search')
+        
+        # Refresh Button
+        self.refresh_button = QPushButton('Refresh')
+        self.layout.addWidget(self.refresh_button)
+        self.refresh_button.clicked.connect(self.handle_refresh_button)
+        
+        # Update LineEdits
+        self.update_line1 = QLineEdit()  # This is for original_content
+        self.update_line2 = QLineEdit()  # This is for new_content
+        
+        # Labels for update LineEdits
+        self.update_label1 = QLabel("Original Content")
+        self.update_label2 = QLabel("New Content")
+        
+        # Add widgets to layout
+        self.layout.addWidget(logo_label)
+        self.layout.addWidget(self.input_line)
+        self.layout.addWidget(self.response_text)
+        self.layout.addWidget(self.ask_button)
+        self.layout.addWidget(self.reveal_button)
+        self.layout.addWidget(self.eliminate_button)
+        self.layout.addWidget(self.search_button)  # Moved the search button here
+        self.layout.addWidget(self.update_button)
+        
+        # Add labels and update LineEdits to layout
+        self.layout.addWidget(self.update_label1)
+        self.layout.addWidget(self.update_line1)
+        self.layout.addWidget(self.update_label2)
+        self.layout.addWidget(self.update_line2)
+
+        # Connect signals and slots
+        self.ask_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.ask_command))
+        self.reveal_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.reveal_command))
+        self.eliminate_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.eliminate_command))
+        self.update_button.clicked.connect(self.handle_update_button)  # Handle the Update button separately
+        self.search_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.search_command))
+        
+        print("UI initialized successfully")
+
+    # Slot functions
+    def handle_refresh_button(self):
+        print("Refresh button clicked")
+        # Start a new worker thread for refreshing
+        self.worker = Worker(DocumentDiglet_NoInterpy_V5.compute_and_store_embedding_and_backup_learnings)
+        self.worker.result_ready.connect(self.handle_result)
+        self.worker.start()
+
+    def handle_update_button(self):
+        print("Update button clicked")
+        original_content = self.update_line1.text()
+        new_content = self.update_line2.text()
+        self.update_line1.clear()
+        self.update_line2.clear()
+
+        # Start a new worker thread
+        self.worker = Worker(DocumentDiglet_NoInterpy_V5.update_command, original_content, new_content)
+        self.worker.result_ready.connect(self.handle_result)
+        self.worker.start()
+
+
+
+    def closeEvent(self, event):
+        if self.mongo_process is not None:
+            self.mongo_process.terminate()
+        event.accept()
+        
+        
+    def handle_button(self, command_func):
+        print(f"{command_func.__name__} button clicked")
+        input_text = self.input_line.text()
+        self.input_line.clear()
+
+        # Start a new worker thread
+        self.worker = Worker(command_func, input_text)
+        self.worker.result_ready.connect(self.handle_result)
+        self.worker.start()
+
+    def handle_result(self, result):
+        print(f"Result ready: {result}")
+        self.response_text.setText(str(result))
+
+
+def main():
+    print("Running main function")
+    app = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    print("Main window should be showing now")
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    print("Executing script")
+    main()
