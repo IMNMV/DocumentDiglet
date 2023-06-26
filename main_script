@@ -3,7 +3,7 @@
 """
 Created on Fri Jun 24 11:56:10 2023
 
-@author: nyk
+@author: nyk, GPT-4
 """
 
 from nltk.tokenize import sent_tokenize
@@ -14,10 +14,7 @@ import numpy as np
 import os
 import logging
 import time
-#from scipy.spatial import distance
 from nltk.corpus import stopwords
-#from string import punctuation
-#import re
 import shutil
 import subprocess
 
