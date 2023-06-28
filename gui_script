@@ -3,23 +3,30 @@
 """
 Created on Fri Jun 24 11:56:10 2023
 
-@author: nyk, GPT-4
+@author: nyk
 """
 
+# V7 adds a button to explain the commads and best practices
 
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLineEdit, QTextEdit, QLabel, QWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLineEdit, QTextEdit, QLabel, QWidget, QHBoxLayout
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QPixmap
 import sys
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from PyQt5.QtCore import pyqtSignal
 
-# Import the script 
+# Import your script here
 import DocumentDiglet_NoInterpy_V5
 
 print("Script imported successfully")
 
+
 class Worker(QThread):
     result_ready = pyqtSignal(object)
+    message_ready = pyqtSignal(str)  # New signal
 
     def __init__(self, func, *args, **kwargs):
         super().__init__()
@@ -31,11 +38,16 @@ class Worker(QThread):
         result = self.func(*self.args, **self.kwargs)
         self.result_ready.emit(result)
 
+
 class MainWindow(QMainWindow):
+    # Declare the signal at the class level
+    bug_report_ready = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
 
         self.mongo_process = None
+        self.bug_report_mode = False
 
         self.setWindowTitle('Document Diglet')
 
@@ -50,6 +62,8 @@ class MainWindow(QMainWindow):
 
         # Layout
         self.layout = QVBoxLayout()
+        self.top_right_layout = QHBoxLayout()
+        self.layout.addLayout(self.top_right_layout)
         self.central_widget.setLayout(self.layout)
 
         # Logo
@@ -82,6 +96,16 @@ class MainWindow(QMainWindow):
         # Labels for update LineEdits
         self.update_label1 = QLabel("Original Content")
         self.update_label2 = QLabel("New Content")
+
+        # Help Button
+        self.help_button = QPushButton('?')
+        self.help_button.setFixedSize(40, 40)  # Small size button
+        self.help_button.clicked.connect(self.handle_help_button)
+
+        # Bug Report Button
+        self.bug_report_button = QPushButton('Bug Report')
+        self.bug_report_button.setFixedSize(100, 40)  # Small size button
+        self.bug_report_button.clicked.connect(self.handle_bug_report_button)
         
         # Add widgets to layout
         self.layout.addWidget(logo_label)
@@ -90,7 +114,7 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.ask_button)
         self.layout.addWidget(self.reveal_button)
         self.layout.addWidget(self.eliminate_button)
-        self.layout.addWidget(self.search_button)  # Moved the search button here
+        self.layout.addWidget(self.search_button)
         self.layout.addWidget(self.update_button)
         
         # Add labels and update LineEdits to layout
@@ -99,13 +123,20 @@ class MainWindow(QMainWindow):
         self.layout.addWidget(self.update_label2)
         self.layout.addWidget(self.update_line2)
 
+        # Add help and bug report buttons to the top right layout
+        self.top_right_layout.addWidget(self.help_button)
+        self.top_right_layout.addWidget(self.bug_report_button)
+
         # Connect signals and slots
         self.ask_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.ask_command))
         self.reveal_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.reveal_command))
         self.eliminate_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.eliminate_command))
-        self.update_button.clicked.connect(self.handle_update_button)  # Handle the Update button separately
+        self.update_button.clicked.connect(self.handle_update_button)
         self.search_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.search_command))
         
+        # Connect the new signal to the slot function
+        self.bug_report_ready.connect(self.send_bug_report)
+
         print("UI initialized successfully")
 
     # Slot functions
@@ -128,14 +159,75 @@ class MainWindow(QMainWindow):
         self.worker.result_ready.connect(self.handle_result)
         self.worker.start()
 
+    def handle_help_button(self):
+        # Show help instructions in the text box
+        help_text = """
+        This is your help text. Update it with the appropriate instructions.
+        """
+        self.response_text.setText(help_text)
+      
+        
+    def handle_bug_report_button(self):
+        if not self.bug_report_mode:
+            # If the user just clicked to start bug report
+            self.bug_report_mode = True
+            self.bug_report_button.setText('Submit')
+            self.input_line.setPlaceholderText("Type your bug report and click 'Submit':")
+        else:
+            # If the user is submitting the bug report
+            self.bug_report_mode = False
+            self.bug_report_button.setText('Bug Report')
+            bug_report = self.input_line.text()
+            self.input_line.clear()
+            self.input_line.setPlaceholderText("")
+    
+            # Start a new worker thread to send the bug report
+            self.worker = Worker(self.send_bug_report, bug_report)
+            self.worker.result_ready.connect(self.handle_bug_report_result)
+            self.worker.start()  # start the worker thread only in the submission mode
 
 
-    def closeEvent(self, event):
-        if self.mongo_process is not None:
-            self.mongo_process.terminate()
-        event.accept()
         
-        
+   
+
+    def handle_bug_report_result(self, result):
+    # Display the result (either the success message or the error message) in the GUI
+        self.response_text.setText(result)
+
+    
+    def send_bug_report(self, bug_report):
+    # Function to send the bug report as an email
+
+        # Define these according to your email server settings - need 2FA on a gmail account. follow this link for info on how to do it : https://stackoverflow.com/questions/73365098/how-to-turn-on-less-secure-app-access-on-google
+        from_address = "yourgmail@gmail.com"
+        to_address = "yourgmail@gmail.com"
+        server_address = "smtp.gmail.com"
+        port = ###  
+        username = "yourgmail@gmail.com"
+        password = "######"  # Remember to change to your password you received from the stackoverflow tutorial
+    
+        # Create the email
+        msg = MIMEMultipart()
+        msg["From"] = from_address
+        msg["To"] = to_address
+        msg["Subject"] = "Bug Report"
+        msg.attach(MIMEText(bug_report))
+    
+        # Connect to the server and send the email
+        try:
+            server = smtplib.SMTP(server_address, port)
+            server.ehlo()  # Can be omitted
+            server.starttls()
+            server.login(username, password)
+            server.send_message(msg)
+            server.close()
+            return "Bug report submitted successfully."
+        except Exception as e:
+            return f"Failed to send bug report: {e}"
+    
+
+
+
     def handle_button(self, command_func):
         print(f"{command_func.__name__} button clicked")
         input_text = self.input_line.text()
@@ -158,6 +250,7 @@ def main():
     main_window.show()
     print("Main window should be showing now")
     sys.exit(app.exec_())
+
 
 if __name__ == '__main__':
     print("Executing script")
