@@ -7,6 +7,8 @@ Created on Fri Jun 24 11:56:10 2023
 """
 
 # V7 adds a button to explain the commads and best practices
+# Suuuper outdated. Removed the email for bug reports and added a log file to make it truly 100% offline. 
+# Current version is way better than this will upload once that one is more refined
 
 
 from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLineEdit, QTextEdit, QLabel, QWidget, QHBoxLayout
