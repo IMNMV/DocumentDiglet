@@ -2,6 +2,8 @@
 
 Project: Offline Semantic Document Search 
 
+*Note this description is outdated as of 8/14. Will make an update soon.
+
 This project aims to create an efficient, offline way to semantically search documents. It offers a streamlined approach to make any dynamic repository easily accessible to team members, surpassing the capabilities of simple keyword search functionalities like Ctrl+F or an FAQ.
 
 By leveraging transformer models and cosine similarity, this project provides the ability to 'converse' with your documents, initiating an interactive and intelligent text exploration.
