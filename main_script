@@ -6,76 +6,115 @@ Created on Fri Jun 24 11:56:10 2023
 @author: nyk, GPT-4
 """
 
-from nltk.tokenize import sent_tokenize
+# V10 will have logging for user questions, and user interactive features for the top n and threshold for retrieving context
+# We can also try adding a configuration file
+# works but mongo db can be taken out if going to use with the gui since that takes care of the mongo db now
+# Works as of 3JUL2023
+# # Makes error handling 100% offline so no email is sent - adds it back cause this part is okay to be online
+# V19 added saving the mongo db collection automatically when ending the session and chaining flags for the superpower command
+# V 20 adds timer to gui
+# skips V21
+# V22 tries a different approach for the model. We have been using models for symmetric search. Now let's try asymmetric search
+# V22 tries masmarco mini lm - nothing changes relative to the code except model and modifying them to make it work
+# V23 uses the bert lm  - nothing changes relative to the code except model and modifying them to make it work
+# V23 updated to clean up spacing for results and clear all previous results when a new button is hit
+# V23 -l now shows current collecetion youre in as well as active collections
+# V24 adds near and exact search (but took this out in the next iteration)
+# V26 begins to make this more realistic for the job (take out eliminate and update - to use superpower now click the reveal button
+# V26 adds update and delete to superpower which reveal takes care of, adds a background, makes buttons more appealing, gives feedback if buttons are pushed without the mongo db
+# V27 turns search into a drop down for near search and exact search (sike just adding V24s idea back)
+# V28 adds enter button for earthquake and starts working on the output box UO
+# v29 adds more UI feature
+# V30 isnt different just adds a new version because we're going to try using this script at site
+
+
+from nltk.tokenize import sent_tokenize, word_tokenize
 from datetime import datetime
-from pymongo import MongoClient, errors
-from sentence_transformers import SentenceTransformer
-import numpy as np
+from pymongo import MongoClient
 import os
-import logging
-import time
-from nltk.corpus import stopwords
+import numpy as np
 import shutil
-import subprocess
+from transformers import AutoTokenizer, AutoModel
+import torch
+
+# Allow users to change or add a new collection
+
+def connect_to_collection(db_name, collection_name):
+    client = MongoClient('mongodb://localhost:27019/')
+    db = client[db_name]
+    collection = db[collection_name]
+    return collection
 
 
-# Configure logging
-logging.basicConfig(filename='knowledge_base.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Define the mean pooling function
+def mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output[0] # First element of model_output contains all token embeddings
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
-class DBHandler:
-    def __init__(self):
-        self.client = None
-        self.db = None
-        self.collection = None
+# Load model and tokenizer from local directory
+model_dir = '/Users/nyk/marcodistilbert/msmarco-distilbert-base-v4'
+tokenizer = AutoTokenizer.from_pretrained(model_dir)
+model = AutoModel.from_pretrained(model_dir)
 
-    def get_mongodb_connection(self, uri, retry_count=5):
-        for i in range(retry_count):
-            try:
-                client = MongoClient(uri)
-                return client
-            except errors.ConnectionFailure as e:
-                if i < retry_count - 1:  # i is zero indexed
-                    print(f"Failed to connect to MongoDB (attempt {i + 1}), retrying in 5 seconds.")
-                    time.sleep(5)
-                    continue
-                else:
-                    print("Failed to connect to MongoDB, please check your MongoDB connection.")
-                    logging.error(f"Failed to connect to MongoDB: {e}")
-                    raise SystemExit()
-
-    def connect(self):
-        if self.client is None:
-            self.client = self.get_mongodb_connection('mongodb://localhost:#####/')
-            self.db = self.client['knowledge_base3']
-            self.collection = self.db['proto1']
-
-    def disconnect(self):
-        if self.client is not None:
-            self.client.close()
-            self.client = None
-            self.db = None
-            self.collection = None
-
-db_handler = DBHandler()
-
-# Initialize the model to create sentence embeddings
-model = SentenceTransformer('/Users/nyk/sentence-sim/all-MiniLM-L6-v2')
 
 # Takes a text string as an input and replaces all newline characters (\n) with a space, effectively making the text a single line.
-def preprocess_text(text):
-    return text.replace('\n', ' ')
+
+
+def preprocess_chunk(chunk):
+    # Replace newlines with spaces
+    return chunk.replace('\n', ' ')
+
+def insert_into_mongo(entry, collection):
+    # Compute the embedding for the entry
+    encoded_input = tokenizer(entry, padding=True, truncation=True, return_tensors='pt')
+    with torch.no_grad():
+        model_output = model(**encoded_input)
+    embedding = mean_pooling(model_output, encoded_input['attention_mask']).tolist()
+
+    # Create the document to insert into the MongoDB
+    document = {
+            'content': entry,
+            'content_embedding': embedding,
+            'is_question': False,  # Include the is_question field
+        }
+        # Insert the document into the collection
+
+    collection.insert_one(document)
+
+
+
+def preprocess_and_insert_text(text, collection):
+    # Split the text into chunks based on the backtick character
+    chunks = text.split('`')
+    new_chunks = []  # List to hold new chunks that were added to the database
+
+    # Process each chunk and insert it into the MongoDB
+    for chunk in chunks:
+        chunk = preprocess_chunk(chunk)  # Preprocess the chunk
+        if len(chunk.split()) > 512:
+            print("Learning > 512 tokens detected.")
+        insert_into_mongo(chunk, collection)  # Insert the chunk into MongoDB
+        new_chunks.append(chunk)
+
+    return new_chunks
+
+
+
+
 
 # This function calculates the cosine similarity between two vectors a and b by taking their dot product and dividing it by the product of their norms (lengths). 
 # This is a measure of how similar the two vectors are.
 def cosine_similarity(a, b):
+    
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 
-def get_most_relevant_learnings(user_prompt, top_n=5, threshold=0.4):
-    db_handler.connect()
+def get_most_relevant_learnings(user_prompt, collection, top_n=6, threshold=0.0):
     user_prompt_embedding = model.encode([user_prompt], show_progress_bar=False)[0]
+    
     learning_similarity = []
-    for entry in db_handler.collection.find():
+    for entry in collection.find():  # Use the collection passed as argument
         if entry.get('is_question', False):
             continue
         content_embedding = np.array(entry['content_embedding'])
@@ -83,126 +122,191 @@ def get_most_relevant_learnings(user_prompt, top_n=5, threshold=0.4):
         if similarity > threshold:
             learning_similarity.append((entry['content'], similarity))
     
-    # Sort by similarity and get the top_n
     learning_similarity.sort(key=lambda x: x[1], reverse=True)
     most_relevant_learnings = [learning for learning, similarity in learning_similarity[:top_n]]
     
-    # If there's no learning found, return a helpful message
     if not most_relevant_learnings:
-        db_handler.disconnect()
         return "Not enough context found. Please try rewording your phrase or asking a different question."
     
-    db_handler.disconnect()
     return most_relevant_learnings
 
 
-def compute_and_store_embedding(text):
-    # Compute the embedding for the text
-    db_handler.connect()
-    embedding = model.encode([text])[0].tolist()
-
+def compute_and_store_embedding(text, collection, is_question=False):
+    # Tokenize and compute token embeddings
+    encoded_input = tokenizer(text, padding=True, truncation=True, return_tensors='pt')
+    with torch.no_grad():
+        model_output = model(**encoded_input)
+    
+    # Perform pooling to get sentence embedding
+    embedding = mean_pooling(model_output, encoded_input['attention_mask']).tolist()
+    
     # Check if this text is already in the database
-    if db_handler.collection.count_documents({'content': text}, limit = 1) == 0:
-        # If it's not, add it to the database
-        db_handler.collection.insert_one({'content': text, 'content_embedding': embedding, 'is_question': False})
-        db_handler.disconnect()
-        return True  # Return True when a new sentence is added
+    if not is_question and collection.count_documents({'content': text}, limit=1) == 0:
+     # If it's not a question and it's not already in the database, add it to the database
+     collection.insert_one({'content': text, 'content_embedding': embedding, 'is_question': False})
+    elif is_question:
+         print(f"Question '{text}' not stored in the database.")
     else:
-        print(f"Entry '{text}' already exists in the database.")
-    db_handler.disconnect()
-    return False  # Return False when the sentence already exists in the database
+         print(f"Entry '{text}' already exists in the database.")
+        
+    return embedding
 
 
-# Constants...
-stop_words = set(stopwords.words('english'))
 
-def compute_and_store_embedding_and_backup_learnings():
+def compute_and_store_embedding_and_backup_learnings(collection):
+    learnings_dir = '/Users/nyk/Desktop/proto'
+    learnings_file = os.path.join(learnings_dir, 'learnings.txt')
+    backup_dir = os.path.join(learnings_dir, 'backups')
+
+    # Ensure directories and learnings.txt file exist
+    os.makedirs(learnings_dir, exist_ok=True)
+    os.makedirs(backup_dir, exist_ok=True)
+    if not os.path.exists(learnings_file):
+        with open(learnings_file, 'w') as f:
+            pass
+
     # Update the database with new learnings
-    with open('/Users/nyk/Desktop/proto/learnings.txt', 'r') as file:
+    with open(learnings_file, 'r') as file:
         learnings = file.read()
 
-    sentences = sent_tokenize(learnings)
-    new_sentences = []  # List to hold new sentences that were added to the database
+    new_chunks = preprocess_and_insert_text(learnings, collection)  # Process the learnings and insert them into MongoDB
 
-    for sentence in sentences:
-        sentence = preprocess_text(sentence)
-        if compute_and_store_embedding(sentence):
-            new_sentences.append(sentence)
-
-    # Get the directory of 'learnings.txt'
-    learnings_dir = os.path.dirname('/Users/nyk/Desktop/proto/learnings.txt')
-
-    # Check if learnings.txt is empty - if it is do not create a backup
-    if os.stat("/Users/nyk/Desktop/proto/learnings.txt").st_size != 0:
+    # Check if learnings.txt is empty - if it is, do not create a backup
+    if os.stat(learnings_file).st_size != 0:
         # Create a backup before clearing the file
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_filename = f'learnings_backup_{timestamp}.txt'
-
-        # Form the path of the backup file
-        backup_path = os.path.join(learnings_dir, 'backups', backup_filename)
-
-        shutil.copy('/Users/nyk/Desktop/proto/learnings.txt', backup_path)
+        backup_path = os.path.join(backup_dir, backup_filename)
+        shutil.copy(learnings_file, backup_path)
 
         # Clear the file after creating a backup
-        open('/Users/nyk/Desktop/proto/learnings.txt', 'w').close()
+        with open(learnings_file, 'w') as f:
+            pass
     else:
-        print("Learnings file is empty. No backup created.")
-    return new_sentences
+        return ["Learnings file is empty. No backup created."]
+
+    return new_chunks
 
 
-def reveal_command(verbose):
-    db_handler.connect()
+'''
+def reveal_command(collection, verbose=False):  # set default value to False
     entries = []
-    for doc in db_handler.collection.find({'is_question': False}):
-        if verbose:
-            entries.append(str(doc))
+    for doc in collection.find({'is_question': False}):
+        if verbose:  # no need to compare to '-v', just check if verbose is True
+            entries.append("*" + str(doc) + "*")  # display the full document (including the embedding)
         else:
-            entries.append(doc['content'])
-    db_handler.disconnect()
+            entries.append("*" + doc['content'] + "*")  # display only the content
     return "\n".join(entries)
+'''
 
-def eliminate_command(content_to_delete):
-    db_handler.connect()
-    result = db_handler.collection.delete_one({'content': content_to_delete})
-    db_handler.disconnect()
+def reveal_command(collection, verbose=False):  # set default value to False
+    entries = []
+    for doc in collection.find({'is_question': False}):
+        content = doc['content']
+        if verbose:  # If verbose mode, include the entire document as a string
+            content = str(doc)
+
+        print(f"DEBUG BEFORE: {content}")  # Debug print before adding asterisks
+
+        # Wrap the content with asterisks and append to entries
+        entry_str = f"*{content}*"
+        print(f"DEBUG AFTER: {entry_str}")  # Debug print after adding asterisks
+
+        entries.append(entry_str)
+
+    # Join the entries with a newline separator and return
+    result = "\n".join(entries)
+    print(f"FINAL DEBUG: {result}")  #
+
+
+
+
+def eliminate_command(collection, content_to_delete):
+    result = collection.delete_one({'content': content_to_delete})
     if result.deleted_count > 0:
         return f"Entry '{content_to_delete}' removed from the database."
     else:
         return f"Entry '{content_to_delete}' not found in the database."
 
 def ask_command(question):
-    most_relevant_learning = get_most_relevant_learnings(question)
-    return f"Most relevant learning: {most_relevant_learning}"
+    most_relevant_learnings = get_most_relevant_learnings(question)
+    
+    # check if most_relevant_learnings is a list
+    if isinstance(most_relevant_learnings, list):
+        formatted_response = "\n".join(most_relevant_learnings)
+        return f"Most relevant learnings:\n{formatted_response}"
+    else:
+        # single string response (like the "Not enough context found." message)
+        return f"Most relevant learning: {most_relevant_learnings}"
 
-def update_command(original_content, new_content):
-    db_handler.connect()
+
+def update_command(collection, original_content, new_content):
     # Try to find the original entry
-    original_entry = db_handler.collection.find_one({'content': original_content})
+    original_entry = collection.find_one({'content': original_content})
     if original_entry:
         # If the original entry is found, update its content and its embedding
-        new_embedding = model.encode([new_content], show_progress_bar=False)[0].tolist()
-        db_handler.collection.update_one({'_id': original_entry['_id']}, {'$set': {'content': new_content, 'content_embedding': new_embedding}})
-        db_handler.disconnect()
+        new_embedding = compute_and_store_embedding(new_content, collection)
+        collection.update_one({'_id': original_entry['_id']}, {'$set': {'content': new_content, 'content_embedding': new_embedding}})
         return f"Entry '{original_content}' updated to '{new_content}'."
     else:
-        db_handler.disconnect()
         return f"Entry '{original_content}' not found."
 
-def search_command(query):
-    db_handler.connect()
-    results = db_handler.collection.find({'content': {'$regex': query}})
+
+    
+'''
+# updated to make case insensitive
+def search_command(collection, query):
+    #results = collection.find({'content': {'$regex': f'\\b{query}\\b', '$options': 'i'}}) # Exact matching only (case insensitive)
+    results = collection.find({'content': {'$regex': f'{query}', '$options': 'i'}}) # This line adds more potential matches (near match)  but increases false positives
+
     matches = [result['content'] for result in results]
-    db_handler.disconnect()
+    return "\n".join(matches)
+'''
+# Updated for Near and Exact search
+def search_command_exact(collection, query):
+    #results = collection.find({'content': {'$regex': f'\\b{query}\\b', '$options': 'i'}}) # Case insensitive
+    results = collection.find({'content': {'$regex': f'(\\b|^| ){query}(\\b|$| )', '$options': 'i'}}) # case insensitive + more exact
+
+    matches = [result['content'] for result in results]
     return "\n".join(matches)
 
-def start_mongodb():
-    mongo_process = subprocess.Popen(['mongod', '--dbpath', 'mongodb-data/', '--port', '#####'])
-    # You can customize the command based on your MongoDB installation and configuration
-    return mongo_process
+def search_command_near(collection, query):
+    results = collection.find({'content': {'$regex': f'{query}', '$options': 'i'}}) 
+    matches = [result['content'] for result in results]
+    return "\n".join(matches)
 
-if __name__ == '__main__':
-    # Start MongoDB process
-    mongodb_process = start_mongodb()
 
-    # Terminate MongoDB process when the script exits
-    mongodb_process.terminate()
+
+
+
+def ask_and_get_most_relevant(collection, user_prompt, top_n=5, threshold=0.0):
+    # user_prompt_embedding = compute_and_store_embedding(user_prompt, collection)
+    user_prompt_embedding = compute_and_store_embedding(user_prompt, collection, is_question=True)
+
+    learnings_cursor = collection.find({'is_question': False})
+    scores = []
+
+    for learning in learnings_cursor:
+        learning_embedding = learning['content_embedding']
+
+        # Convert the embeddings back to numpy arrays before passing them to cosine_similarity
+        user_prompt_embedding_array = np.array(user_prompt_embedding).reshape(-1,)
+        learning_embedding_array = np.array(learning_embedding).reshape(-1,)
+        score = cosine_similarity(user_prompt_embedding_array, learning_embedding_array)
+
+        scores.append((learning, score))
+
+    scores.sort(key=lambda x: x[1], reverse=True)
+
+    most_relevant_learnings = [entry[0]['content'] for entry in scores[:top_n] if entry[1] > threshold]
+    
+    # If no relevant learnings found, return a message
+    if not most_relevant_learnings:
+        return ["No relevant documents found for your query. Try rephrasing your question and/or adjusting the relevance score."]
+
+    # Return a tuple with a tag and the results
+    return "ask_results", most_relevant_learnings
+
+
+
+
