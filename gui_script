@@ -3,32 +3,72 @@
 """
 Created on Fri Jun 24 11:56:10 2023
 
-@author: nyk
+@author: nyk, GPT-4
 """
 
-# V7 adds a button to explain the commads and best practices
-# Suuuper outdated. Removed the email for bug reports and added a log file to make it truly 100% offline. 
-# Current version is way better than this will upload once that one is more refined
+# V15 is a skip from V 12. Goal is to clean up the back end script so it runs as efficienctly as possible. The mongoDB management is all done here.
+# Works as of 3JUL2023
+# Adds better error handling for the user to see issues
+# added back email but its a bad idea for privacy so going bakc to text file for bug reporting
+# V 17 creates directories for learnings/backups and logs if they dont exist
+# V18 woooo!!!! solved the issue switching databases and pulling info1!!!!!!!
+# V19 added saving the mongo db collection automatically when ending the session and chaining flags for the superpower command
+# V20 adds a timer to auto terminate the mongo db if there is inactivity for security
+# skips V21
+# V22 tries a different approach for the model. We have been using models for symmetric search. Now let's try asymmetric search
+# V22 tries masmarco mini lm - nothing changes relative to the code except model and modifying them to make it work
+# V23 uses the bert lm  - nothing changes relative to the code except model and modifying them to make it work
+# V23 updated to clean up spacing for results and clear all previous results when a new button is hit
+# V23 -l now shows current collecetion youre in as well as active collections
+# V24 adds near and exact search (but took this out in the next iteration)
+# V26 begins to make this more realistic for the job (take out eliminate and update - to use superpower now click the reveal button
+# V26 adds update and delete to superpower which reveal takes care of, adds a background, makes buttons more appealing, gives feedback if buttons are pushed without the mongo db
+# V27 turns search into a drop down for near search and exact search (sike just adding V24s idea back)
+# V28 adds enter button for earthquake and starts working on the output box UO
+# v29 adds more UI feature
+# V30 isnt different just adds a new version because we're going to try using this script at site
 
+from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLineEdit, QTextEdit, QLabel, QWidget, QHBoxLayout, QSpinBox, QDoubleSpinBox, QSlider
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
+from PyQt5.QtGui import QPixmap, QPalette, QBrush, QTextCursor
 
-from PyQt5.QtWidgets import QApplication, QMainWindow, QPushButton, QVBoxLayout, QLineEdit, QTextEdit, QLabel, QWidget, QHBoxLayout
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QPixmap
+from pymongo import MongoClient
 import sys
-import smtplib
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from PyQt5.QtCore import pyqtSignal
+import subprocess
+import os
+import datetime
+import multiprocessing
+import json
+
 
 # Import your script here
-import DocumentDiglet_NoInterpy_V5
+import Bert_DocumentDiglet_NoInterpy_V30
 
 print("Script imported successfully")
 
 
+
+
+# To log information about the GUI (bugs, user input/model output)
+log_dir = '/Users/nyk/Desktop/proto/logs'
+
+# Create directory if it doesn't exist
+os.makedirs(log_dir, exist_ok=True)
+
+
+log_file = os.path.join(log_dir, 'knowledge_base.log')
+
+# Open the file in append mode, which will create it if it doesn't exist
+with open(log_file, 'a') as f:
+    pass
+
 class Worker(QThread):
     result_ready = pyqtSignal(object)
+    
     message_ready = pyqtSignal(str)  # New signal
+    
+    error_occurred = pyqtSignal(str)  # emits the error message as a string
+
 
     def __init__(self, func, *args, **kwargs):
         super().__init__()
@@ -37,36 +77,160 @@ class Worker(QThread):
         self.kwargs = kwargs
 
     def run(self):
-        result = self.func(*self.args, **self.kwargs)
-        self.result_ready.emit(result)
+        try:
+            result = self.func(*self.args, **self.kwargs)
+            self.result_ready.emit(result)
+        except Exception as e:
+            err_msg = f"Exception occurred in worker thread while executing function {self.func.__name__} with args {self.args} and kwargs {self.kwargs}: {e}"
+            print(err_msg)
+            self.error_occurred.emit(err_msg)
+    
+        
 
 
 class MainWindow(QMainWindow):
+    print("MainWindow __init__ called")
+
     # Declare the signal at the class level
     bug_report_ready = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
+        
+        self.resize(1200, 900)  # Set initial size so the display is a nice length/width
 
-        self.mongo_process = None
+    
+        self.default_db_name = "bert_base"
+        self.default_collection_name = "proto1"
+        self.mongo_port = 27019
+        
+        # Set the default DB to the above so we have a starting point to create collections from
+        self.default_collection = self.get_db_collection(self.default_db_name, self.default_collection_name)
+        
+        # MongoDB
+        self.mongodb_running = False
+        self.mongodb_process = None
         self.bug_report_mode = False
+        
+        # Get the last used collection from the config file. First time this is run there will be no active connection. superpower -a [new_collection] to make a new one and then superpower -c [collection name] to go to a 
+        self.default_collection_name = self.get_last_used_collection()
+        self.default_collection = self.get_db_collection(self.default_db_name, self.default_collection_name)
+
+        # Create a QTimer and connect its timeout signal to the function that closes MongoDB
+        self.inactivity_timer = QTimer(self)
+        self.inactivity_timer.timeout.connect(self.close_mongodb_if_active)
+
+        # Set timer to 8 hours (in milliseconds)
+        self.inactivity_timer.setInterval(8 * 60 * 60 * 1000)
+        self.inactivity_timer.start()
 
         self.setWindowTitle('Document Diglet')
 
         self.init_ui()
+        
+        # Bring the window to the front
+        # Call the function to bring the window to the front after the event loop has started
+        self.activateWindow()
+        self.raise_()
+        
+  
+        
+                
+
+        
+        
+    def closeEvent(self, event):
+        # Stop MongoDB process
+        if self.mongodb_process:
+            self.mongodb_process.terminate()
+        # Stop the timer when the window is closed
+        self.inactivity_timer.stop()
+        self.close_mongodb_if_active()  # This is to ensure MongoDB gets closed if the window is closed
+        event.accept()  # let the window close
+
+    def close_mongodb_if_active(self):
+        if self.mongodb_running and self.mongodb_process:
+            self.mongodb_process.terminate()
+            self.mongodb_running = False
+            print("MongoDB process terminated due to inactivity.")
+            
+    # To connect to other signals in order to gauge inactivity.
+    def on_user_interaction(self):
+        self.inactivity_timer.start()  # resets the timer
+
 
     def init_ui(self):
         print("Initializing UI")
+ 
+        
+        
 
         # Central widget
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
+        
+        # Load the image into a QPixmap
+        bg = QPixmap('/Users/nyk/Desktop/forest.png')
+    
+        # Create a QPalette object
+        palette = QPalette()
+    
+        # Set the QPixmap as the background brush of the palette
+        palette.setBrush(QPalette.Background, QBrush(bg))
+    
+        # Set the palette of the application
+        self.setPalette(palette)
+    
+        # Set the AutoFillBackground property to True
+        self.setAutoFillBackground(True)
+
 
         # Layout
         self.layout = QVBoxLayout()
         self.top_right_layout = QHBoxLayout()
         self.layout.addLayout(self.top_right_layout)
         self.central_widget.setLayout(self.layout)
+        
+        # Centered buttons
+        self.ask_button_layout = QHBoxLayout()
+        #self.search_button_layout = QHBoxLayout()
+        self.reveal_button_layout = QHBoxLayout()
+        self.refresh_button_layout = QHBoxLayout()
+        # Layout for the Search buttons
+        self.search_buttons_layout = QHBoxLayout()
+
+        '''        
+        # MongoDB start/stop button
+        self.mongodb_button = QPushButton('Start MongoDB')
+        self.mongodb_button.setStyleSheet('QPushButton {background-color: red;}')  # red by default (stopped)
+        self.mongodb_button.setStyleSheet('QPushButton {background-color: #4472C4; color: white;}')
+        self.mongodb_button.setStyleSheet("""
+            QPushButton {
+                background-color: red;
+                color: white;
+                border-radius: 10px;
+                padding: 10px;
+                text-align: center;
+            }
+        """)
+        self.mongodb_button.clicked.connect(self.toggle_mongodb)
+        self.layout.addWidget(self.mongodb_button)
+        '''
+        # MongoDB start/stop button
+        self.mongodb_button = QPushButton('Start MongoDB')
+        self.mongodb_button.setStyleSheet("""
+            QPushButton {
+                background-color: red;
+                color: white;
+                border-radius: 10px;
+                padding: 10px;
+                text-align: center;
+            }
+        """)
+        self.mongodb_button.clicked.connect(self.toggle_mongodb)
+        self.layout.addWidget(self.mongodb_button)
+
+
 
         # Logo
         logo_label = QLabel()
@@ -75,100 +239,564 @@ class MainWindow(QMainWindow):
         logo_label.setPixmap(scaled_pixmap)
         logo_label.setAlignment(Qt.AlignCenter)
 
+###        
+        
+        # Top_n SpinBox
+        # Top_n SpinBox
+  # Top_n SpinBox
+        self.top_n_label = QLabel("Quantity:")
+        self.top_n_label.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
+        self.top_n_spinbox = QSpinBox()
+        self.top_n_spinbox.setRange(1, 100)  # Set a sensible range
+        self.top_n_spinbox.setValue(100)  # Default value 100 to display everything therefore threshold will need to be changed to
+        self.top_n_spinbox.setFixedWidth(60)  # Set a fixed width
+        
+        self.layout.addWidget(self.top_n_label)
+        self.layout.addWidget(self.top_n_spinbox)
+        
+        # Threshold DoubleSpinBox
+        self.threshold_label = QLabel("Relevance:")
+        self.threshold_label.setStyleSheet("""
+            QLabel {
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
+        self.threshold_spinbox = QDoubleSpinBox()
+        self.threshold_spinbox.setRange(0.0, 1.0)  # Set a sensible range
+        self.threshold_spinbox.setSingleStep(0.05)  # Set the amount the value changes when the user clicks the arrows
+        self.threshold_spinbox.setValue(0.2)  # Default value
+        self.threshold_spinbox.setFixedWidth(60)  # Set a fixed width
+        
+        self.layout.addWidget(self.threshold_label)
+        self.layout.addWidget(self.threshold_spinbox)
+    
+###
+
+
+        # Add widgets to layout
+        self.layout.addWidget(self.top_n_label)
+        self.layout.addWidget(self.top_n_spinbox)
+        self.layout.addWidget(self.threshold_label)
+        self.layout.addWidget(self.threshold_spinbox)
+    
+
         # Widgets
         self.input_line = QLineEdit()
         self.response_text = QTextEdit()
         self.response_text.setReadOnly(True)
+        self.input_line.setPlaceholderText("Welcome to Document Diglet! All queries go here.")
+
         
-        self.ask_button = QPushButton('Dig')
+
+        # Moves & code to center them in GUI + color
+        self.ask_button = QPushButton('Earthquake')
+        self.ask_button.setStyleSheet('QPushButton {background-color: #4472C4; color: white;}')
+        self.ask_button.setFixedWidth(100)  # set the width to 100 pixels
+        self.ask_button.setStyleSheet("""
+            QPushButton {
+                background-color: orange;
+                color: white;
+                border-radius: 5px;
+                padding: 5px;
+                text-align: center;
+            }
+        """)
+
+        
+
+        self.search_exact_button = QPushButton('Exact Dig')
+        self.search_exact_button.setStyleSheet("""
+            QPushButton {
+                background-color: #008080;  
+                color: white;
+                border-radius: 5px;
+                padding: 5px;
+                text-align: center;
+            }
+        """)
+        
+        self.search_near_button = QPushButton('Near Dig')
+        self.search_near_button.setStyleSheet("""
+            QPushButton {
+                background-color: #90C3D4;
+                color: white;
+                border-radius: 5px;
+                padding: 5px;
+                text-align: center;
+            }
+        """)
+        
+
+        
+
+        
         self.reveal_button = QPushButton('Reveal')
-        self.eliminate_button = QPushButton('Eliminate')
-        self.update_button = QPushButton('Update')
-        self.search_button = QPushButton('Search')
-        
+        self.reveal_button.setStyleSheet('QPushButton {background-color: #A5A5A5; color: white;}')
+        self.reveal_button.setFixedWidth(100)  # set the width to 100 pixels
+        self.reveal_button.setStyleSheet("""
+            QPushButton {
+                background-color: #FFA07A;
+                color: white;
+                border-radius: 5px;
+                padding: 5px;
+                text-align: center;
+            }
+        """)
+
         # Refresh Button
         self.refresh_button = QPushButton('Refresh')
+        self.refresh_button.setStyleSheet('QPushButton {background-color: #FFC000; color: white;}')
+        self.refresh_button.setFixedWidth(100)  # set the width to 100 pixels
+        self.refresh_button.setStyleSheet("""
+            QPushButton {
+                background-color: #66CDAA;
+                color: white;
+                border-radius: 5px;
+                padding: 5px;
+                text-align: center;
+            }
+        """)
+        
+        # Code for Refresh button centering here since its location is different than other buttons 
+        
         self.layout.addWidget(self.refresh_button)
+        # Code to center Reveal Button
+        # Add stretchable empty space on the left side of the layout (the first parameter is the stretch factor)
+        self.refresh_button_layout.addStretch(1)
+        #Add the button to the layout
+        self.refresh_button_layout.addWidget(self.refresh_button)
+       # Add stretchable empty space on the right side of the layout
+        self.refresh_button_layout.addStretch(1)
+        # Add the button
+        self.layout.addLayout(self.refresh_button_layout)
+        # Make sure its clickable
+        
+        # Add pop up widget
+        self.refresh_button.setToolTip('This button will add what is currently stored in your learnings.txt file into the Mongo Database.')  # Set the tooltip
+     
+        
         self.refresh_button.clicked.connect(self.handle_refresh_button)
+        self.refresh_button.clicked.connect(self.on_user_interaction)
+   
+    
         
-        # Update LineEdits
-        self.update_line1 = QLineEdit()  # This is for original_content
-        self.update_line2 = QLineEdit()  # This is for new_content
-        
-        # Labels for update LineEdits
-        self.update_label1 = QLabel("Original Content")
-        self.update_label2 = QLabel("New Content")
+        # Label for Collection
+        self.collection_label = QLabel()
+       
 
-        # Help Button
+       # Help Button
         self.help_button = QPushButton('?')
+        self.help_button.setStyleSheet("""
+            QPushButton {
+                background-color: #87CEEB;
+                color: white;
+                border-radius: 20px;
+            }
+        """)
         self.help_button.setFixedSize(40, 40)  # Small size button
+        self.help_button.setToolTip('This button will open the help dialog.')  # Set the tooltip
         self.help_button.clicked.connect(self.handle_help_button)
-
+        self.help_button.clicked.connect(self.on_user_interaction)
+        
         # Bug Report Button
         self.bug_report_button = QPushButton('Bug Report')
+        self.bug_report_button.setStyleSheet("""
+            QPushButton {
+                background-color: #9370DB;
+                color: white;
+                border-radius: 20px;
+            }
+        """)
         self.bug_report_button.setFixedSize(100, 40)  # Small size button
+        self.bug_report_button.setToolTip('This button will open the bug report dialog.')  # Set the tooltip
         self.bug_report_button.clicked.connect(self.handle_bug_report_button)
-        
-        # Add widgets to layout
-        self.layout.addWidget(logo_label)
-        self.layout.addWidget(self.input_line)
-        self.layout.addWidget(self.response_text)
-        self.layout.addWidget(self.ask_button)
-        self.layout.addWidget(self.reveal_button)
-        self.layout.addWidget(self.eliminate_button)
-        self.layout.addWidget(self.search_button)
-        self.layout.addWidget(self.update_button)
-        
-        # Add labels and update LineEdits to layout
-        self.layout.addWidget(self.update_label1)
-        self.layout.addWidget(self.update_line1)
-        self.layout.addWidget(self.update_label2)
-        self.layout.addWidget(self.update_line2)
+        self.bug_report_button.clicked.connect(self.on_user_interaction)
 
+
+        # Add widgets to layout
+        self.layout.addWidget(logo_label)  # This is the Diglet logo
+        self.layout.addWidget(self.reveal_button)  # Reveal button
+        #self.layout.addWidget(self.search_button)  # Search button
+        self.layout.addWidget(self.ask_button)  # Dig button
+        
+        # New Search Buttons
+        self.layout.addWidget(self.search_exact_button)  # Exact Search button
+        self.layout.addWidget(self.search_near_button)  # Near Search button
+
+        
         # Add help and bug report buttons to the top right layout
         self.top_right_layout.addWidget(self.help_button)
         self.top_right_layout.addWidget(self.bug_report_button)
+        
+        # Code to center Ask/Dig Button
+        # Add stretchable empty space on the left side of the layout (the first parameter is the stretch factor)
+        self.ask_button_layout.addStretch(1)
+        #Add the button to the layout
+        self.ask_button_layout.addWidget(self.ask_button)
+       # Add stretchable empty space on the right side of the layout
+        self.ask_button_layout.addStretch(1)
+        
+        '''
+        # Code to center Search Button
+        # Add stretchable empty space on the left side of the layout (the first parameter is the stretch factor)
+        self.search_button_layout.addStretch(1)
+        #Add the button to the layout
+        self.search_button_layout.addWidget(self.search_button)
+       # Add stretchable empty space on the right side of the layout
+        self.search_button_layout.addStretch(1)
+        '''
+        
+        # Code to center Search Buttons
+        # Add stretchable empty space on the left side of the layout (the first parameter is the stretch factor)
+        self.search_buttons_layout.addStretch(1)
+
+        
+        # Add the exact search button to the layout
+        self.search_buttons_layout.addWidget(self.search_exact_button)
+        
+        # Add some space between the buttons
+        self.search_buttons_layout.addSpacing(10)
+        
+        # Add the near search button to the layout
+        self.search_buttons_layout.addWidget(self.search_near_button)
+        
+        # Add stretchable empty space on the right side of the layout
+        self.search_buttons_layout.addStretch(1)
+
+        
+        
+        # Code to center Reveal Button
+        # Add stretchable empty space on the left side of the layout (the first parameter is the stretch factor)
+        self.reveal_button_layout.addStretch(1)
+        #Add the button to the layout
+        self.reveal_button_layout.addWidget(self.reveal_button)
+       # Add stretchable empty space on the right side of the layout
+        self.reveal_button_layout.addStretch(1)
+
+
+       # Add this new layout to the main layout
+        self.layout.addLayout(self.reveal_button_layout)
+        self.layout.addLayout(self.search_buttons_layout)
+        self.layout.addLayout(self.ask_button_layout)
+
+        self.layout.addWidget(self.input_line)  # This is the input line
+        self.input_line.setStyleSheet("""
+            QLineEdit {
+                background-color: black;  
+                border: 2px solid #90C3D4;
+                border-radius: 10px;
+                padding: 5px;
+            }
+        """)
+        self.layout.addWidget(self.response_text)  # This is the response text box
+        ###
+        
+        self.response_text.setStyleSheet("""
+        QTextEdit {
+            background-color: #68CD27;  /* Pastel yellow background */
+            color: #696969;  /* Dark gray text */
+            border-radius: 10px;  /* Rounded corners */
+            padding: 10px;  /* Padding around text */
+            margin: 10px;  /* Margin around the text box */
+            border: 2px solid #AFEEEE;  /* Pastel blue border */
+            font-size: 16px;  /* Text size */
+            font-family: 'Helvetica';  /* Font */
+        }
+        /* Custom scrollbar */
+        QTextEdit QScrollBar:vertical {
+            background: #F5F5F5;  /* Light gray background */
+            width: 12px;
+            margin: 15px 0 15px 0;
+            border: 1px transparent #2A2929;
+            border-radius: 4px;
+        }
+        QTextEdit QScrollBar::handle:vertical {
+            background-color: #AFEEEE;  /* Pastel blue handle */
+            min-height: 30px;
+            border-radius: 4px;
+        }
+        QTextEdit QScrollBar::add-line:vertical {
+            height: 0px;
+            subcontrol-position: bottom;
+            subcontrol-origin: margin;
+        }
+        QTextEdit QScrollBar::sub-line:vertical {
+            height: 0 px;
+            subcontrol-position: top;
+            subcontrol-origin: margin;
+        }
+    """)
+
+
+        ###
+
 
         # Connect signals and slots
-        self.ask_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.ask_command))
-        self.reveal_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.reveal_command))
-        self.eliminate_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.eliminate_command))
-        self.update_button.clicked.connect(self.handle_update_button)
-        self.search_button.clicked.connect(lambda: self.handle_button(DocumentDiglet_NoInterpy_V5.search_command))
         
-        # Connect the new signal to the slot function
-        self.bug_report_ready.connect(self.send_bug_report)
+        #self.input_line.returnPressed.connect(lambda: self.handle_ask_button(self.input_line.text()))
+        self.ask_button.clicked.connect(lambda: [self.handle_ask_button(self.input_line.text()), self.on_user_interaction()])
+        #self.search_button.clicked.connect(lambda: [self.handle_search_button(self.input_line.text(), self.default_collection), self.on_user_interaction()])
+        self.search_exact_button.clicked.connect(lambda: [self.handle_search_exact_button(self.input_line.text(), self.default_collection), self.on_user_interaction()])
+        self.search_near_button.clicked.connect(lambda: [self.handle_search_near_button(self.input_line.text(), self.default_collection), self.on_user_interaction()])
+        self.reveal_button.clicked.connect(lambda: [self.handle_reveal_button(), self.on_user_interaction()])
+        
+        # New enter key pressed connection
+        self.input_line.returnPressed.connect(self.ask_button.click)
+        
+        # Allow user to hit enter as soon as relevance score is changed to reduce movement of mouse 
+        self.threshold_spinbox.valueChanged.connect(lambda: self.input_line.setFocus())
+        
+        # Set the keyboard input focus to the input line widget as soon as GUI opens
+        self.input_line.setFocus()  
 
-        print("UI initialized successfully")
+
+
+    # Start definining functions for the UI we just initialized above
+    
+    # Start with the Mongo DB
+    def toggle_mongodb(self):
+        self.deactivate_bug_report_mode()
+        if not self.mongodb_running:
+            # Start MongoDB
+            self.mongodb_process = subprocess.Popen(['mongod', '--dbpath', '/Users/nyk/mongodb-data', '--port', str(self.mongo_port)])
+            self.mongodb_button.setText('Stop MongoDB')
+            self.mongodb_button.setStyleSheet("""
+                QPushButton {
+                    background-color: green;
+                    color: white;
+                    border-radius: 10px;
+                    padding: 10px;
+                    text-align: center;
+                }
+            """)  # green when running
+            self.mongodb_running = True
+            print(f"MongoDB started on port {self.mongo_port}.")
+            
+            # Add the success message here
+            self.response_text.append('MongoDB Successfully started. Document Diglet is ready to go!')
+        else:
+            # Stop MongoDB
+            if self.mongodb_process:
+                self.mongodb_process.terminate()
+            self.mongodb_button.setText('Start MongoDB')
+            self.mongodb_button.setStyleSheet("""
+                QPushButton {
+                    background-color: red;
+                    color: white;
+                    border-radius: 10px;
+                    padding: 10px;
+                    text-align: center;
+                }
+            """)  # red when stopped
+            self.mongodb_running = False
+            print("MongoDB stopped.")
+            # Add the stop message
+            self.response_text.append('MongoDB stopped. The Database will remain locked until the "Start MongoDB" button is clicked again.')
+
+
+           
+
+    def get_db_collection(self, db_name, collection_name):
+        client = MongoClient(f'mongodb://localhost:{self.mongo_port}/')
+        db = client[db_name]
+        collection = db[collection_name]
+        return collection
+
+            
+    def update_last_used_collection(self, collection_name):
+        with open('/Users/nyk/Desktop/proto/config.json', 'r+') as f:
+            data = json.load(f)
+            data['last_used_collection'] = collection_name
+            f.seek(0)  # Reset file position to the beginning.
+            json.dump(data, f)
+            f.truncate()  # Remove remaining part of original file.
+
+    def get_last_used_collection(self):
+        with open('/Users/nyk/Desktop/proto/config.json', 'r') as f:
+            data = json.load(f)
+            return data.get('last_used_collection', 'default')  # Use 'default' if not found.
+
+    
+
+            
+    def handle_superpower_command(self, command):
+        words = command.split()
+        client = MongoClient(f'mongodb://localhost:{self.mongo_port}/')
+        db = client[self.default_db_name]
+    
+        if words[0].lower() == "superpower":
+            if len(words) < 2:
+                self.response_text.append("Invalid command. Please enter a valid superpower command.")
+                return
+    
+            i = 1  # current position in the command
+            while i < len(words):
+                if words[i].lower() == "-a":
+                    i += 1  # increment position to get collection name
+                    new_collection_name = words[i]
+                    dummy_document = {
+                        'content': 'This is a dummy document used to set a reference for a new collection. Please add text to the learnings.txt file then hit refresh to begin populating the database.', 
+                        'content_embedding': [0]*768,
+                        'is_question': False
+                    }
+                    db[new_collection_name].insert_one(dummy_document)
+                    self.response_text.append(f"New collection '{new_collection_name}' created.")
+    
+                    # Populate the new collection with embeddings
+                    #Bert_DocumentDiglet_NoInterpy_V30.compute_and_store_embedding_and_backup_learnings(db[new_collection_name])
+                
+                elif words[i].lower() == "-d":
+                    i += 1  # increment position to get collection name
+                    collection_name = words[i]
+                    if collection_name in db.list_collection_names():
+                        db[collection_name].drop()
+                        self.response_text.append(f"Collection '{collection_name}' deleted.")
+                    else:
+                        self.response_text.append(f"Collection '{collection_name}' does not exist.")
+                
+                elif words[i].lower() == "-c":
+                    i += 1  # increment position to get collection name
+                    collection_name = words[i]
+                    if collection_name in db.list_collection_names():
+                        self.default_collection_name = collection_name
+                        self.default_collection = db[collection_name]
+                        self.response_text.append(f"Switched to collection '{collection_name}'.")
+                        self.collection_label.setText(f"Current Collection: {collection_name}")
+                        self.response_text.append(f"This will be the collection loaded the next time the GUI opens: {self.default_collection_name}")
+    
+                        # Update the last used collection in the config file
+                        self.update_last_used_collection(collection_name)
+                    else:
+                        self.response_text.append(f"Collection '{collection_name}' does not exist.")
+                        print(f"DEBUG: Current default collection: {self.collection_name}")
+    
+                elif words[i].lower() == "-l":
+                    collection_list = db.list_collection_names()
+                    self.response_text.append(f"Active collections: {', '.join(collection_list)}")
+                    self.response_text.append(f"Current collection: '{self.default_collection_name}'")
+    
+            
+                elif words[i].lower() == "-x":
+                    i += 1  # increment position to get entry to delete
+                    entry_to_delete = ' '.join(words[i:])  # Join all the words after -x into a single string
+                    
+                    # Now call the function to eliminate the entry
+                    self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.eliminate_command, self.default_collection, entry_to_delete)
+                    
+                    # Connect the worker's signals to slots and start the worker
+                    self.worker.result_ready.connect(self.handle_result)
+                    self.worker.error_occurred.connect(self.handle_error)  # If you have an error handling function
+                    self.worker.start()
+                
+                    break  # Exit the loop early since we've handled the -x command
+                    
+                    
+                elif words[i].lower() == "-u":
+                    i += 1  # increment position to get the old and new content
+                    content = ' '.join(words[i:])  # Join all the words after -u into a single string
+                    
+                    # Split the content into the old and new content
+                    old_content, new_content = map(str.strip, content.split('&', 1))
+                
+                    # Now call the function to update the entry
+                    self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.update_command, self.default_collection, old_content, new_content)
+                    
+                    # Connect the worker's signals to slots and start the worker
+                    self.worker.result_ready.connect(self.handle_result)
+                    self.worker.error_occurred.connect(self.handle_error)  # If you have an error handling function
+                    self.worker.start()
+                
+                    break  # Exit the loop early since we've handled the -u command
+                
+
+                
+                i += 1  # increment position for next iteration
+                
+
+    
+
+
 
     # Slot functions
+    
+    def handle_error(self, error_msg):
+        # Look for keywords in the error message to identify it as a MongoDB connection error
+        if "Connection refused" in error_msg and "localhost:27019" in error_msg:
+            # If it's a MongoDB connection error, display a custom error message
+            self.response_text.setText("Waiting for MongoDB to start...Please click the red 'Start MongoDB' button to interact with the database.")
+        else:
+            # If it's any other error, display the original error message
+            self.response_text.setText(f"Error: {error_msg}")
+
+
+        
     def handle_refresh_button(self):
-        print("Refresh button clicked")
-        # Start a new worker thread for refreshing
-        self.worker = Worker(DocumentDiglet_NoInterpy_V5.compute_and_store_embedding_and_backup_learnings)
-        self.worker.result_ready.connect(self.handle_result)
-        self.worker.start()
+            self.deactivate_bug_report_mode()
+            self.response_text.append("Loading please wait...")  # Show a loading message
+        # If MongoDB isn't running, return from the function
+            if not self.mongodb_running:
+                self.response_text.append("Please click the 'Start MongoDB' button before attempting to use any of the moves.")
+                return 
+            self.response_text.clear()  # Clear the output box
+            print("Refresh button clicked")
+            # Start a new worker thread for refreshing
+            self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.compute_and_store_embedding_and_backup_learnings, self.default_collection)
+            self.worker.result_ready.connect(self.handle_result)
+            self.worker.error_occurred.connect(self.handle_error)
+            self.worker.start()
 
-    def handle_update_button(self):
-        print("Update button clicked")
-        original_content = self.update_line1.text()
-        new_content = self.update_line2.text()
-        self.update_line1.clear()
-        self.update_line2.clear()
 
-        # Start a new worker thread
-        self.worker = Worker(DocumentDiglet_NoInterpy_V5.update_command, original_content, new_content)
-        self.worker.result_ready.connect(self.handle_result)
-        self.worker.start()
 
     def handle_help_button(self):
+        self.deactivate_bug_report_mode()
         # Show help instructions in the text box
         help_text = """
-        This is your help text. Update it with the appropriate instructions.
+        
+
+HELP GUIDE
+
+    Welcome to Document Diglet! This is a program that allows you to ask your repository questions with the Dig function. This is done by a transformer trained on the semantic meaning of sentences.
+    
+    If you do not Start the MongoDB after a period, the GUI will ask you to start it. 
+    
+    Start/Stop MongoDb: This activates the database where the "memory" for this application is stored. Please activate it in order to interact with the GUI.
+    
+    You can add, change, delete or list the active collections with the superpower commands and chain multiple together. Example: superpower -c [collection to switch to], superpower -a [collection to add], superpower -l, superpower -d [collection to delete], superpower -a [new collection] -c [new collection]
+    
+    Quantity: This allows you to choose the amount of relevant responses you'd like to see from Digging. Set to 100 to display everything. Use threshold to filter as needed.
+    
+    Relevance: This sets the strictness of your results with 1 being the highest one can go. With this feature you can filter out less relevant context. If you see nothing then you likely have it set too high. I'd recommend around .1 - .3
+
+    Refresh: After putting new learnings into the learnings.txt file, hit refresh to add them to the Mongo DB automatically. 
+
+    Bug Report: If you encounter an issue while using this application, click the "Bug Report" button, enter the details of the issue in the input field that appears, and click "Submit". This will send an email with the details of the issue for further investigation.
+
+    Dig: Enter a a question in the input field and click the "Dig" button. The system will fetch the most relevant information from the database that matches your question based on the cosine similarity of your question.
+
+    Reveal: Click the "Reveal" button to see all pieces of information in the database. You can add "-v" (without quotes) in the input field before clicking the "Reveal" button for a more verbose output, showing not just the information, but its corresponding embeddings in the database.
+
+    Eliminate: To remove a piece of information from the database, enter the information exactly as it is in the database into the input field and click the "Eliminate" button.
+    
+    Search: Enter a specific word or phrase in the input field and click the "Search" button. The system will fetch all pieces of information from the database that contain this word or phrase. 
+
+    Update: If you want to update a piece of information in the database, first enter the original information in the 'Original Content' field below. Then enter what you would like to replace the text with in the 'New Content' field. 
+    
+    *Note, this app is still in it's basic stages. You may experience unexpected behaviors. Please report all issues via the bug report button.
+
+
         """
         self.response_text.setText(help_text)
       
         
+    '''  
     def handle_bug_report_button(self):
         if not self.bug_report_mode:
             # If the user just clicked to start bug report
@@ -180,72 +808,199 @@ class MainWindow(QMainWindow):
             self.bug_report_mode = False
             self.bug_report_button.setText('Bug Report')
             bug_report = self.input_line.text()
+            print(f"Bug report submitted: {bug_report}")  # Debug print statement
             self.input_line.clear()
             self.input_line.setPlaceholderText("")
-    
-            # Start a new worker thread to send the bug report
-            self.worker = Worker(self.send_bug_report, bug_report)
-            self.worker.result_ready.connect(self.handle_bug_report_result)
-            self.worker.start()  # start the worker thread only in the submission mode
-
-
         
-   
-
-    def handle_bug_report_result(self, result):
-    # Display the result (either the success message or the error message) in the GUI
-        self.response_text.setText(result)
+            # Log the bug report
+            self.send_bug_report(bug_report)
+    '''  
+    
+    def handle_bug_report_button(self):
+        if not self.bug_report_mode:
+            # If the user just clicked to start bug report
+            self.bug_report_mode = True
+            self.bug_report_button.setText('Submit')
+            self.input_line.setPlaceholderText("Type your bug report and click 'Submit':")
+        else:
+            # If the user is submitting the bug report
+            self.bug_report_mode = False
+            self.bug_report_button.setText('Bug Report')
+            bug_report = self.input_line.text()
+            if not bug_report.strip():  # Check if bug report is empty
+                self.response_text.clear()  # Clear the output box
+                self.response_text.append("No content found. Please enter a valid bug report.")
+                return
+            print(f"Bug report submitted: {bug_report}")  # Debug print statement
+            self.input_line.clear()
+            self.input_line.setPlaceholderText("")
+        
+            # Log the bug report
+            self.send_bug_report(bug_report)
 
     
     def send_bug_report(self, bug_report):
-    # Function to send the bug report as an email
-
-        # Define these according to your email server settings - need 2FA on a gmail account. follow this link for info on how to do it : https://stackoverflow.com/questions/73365098/how-to-turn-on-less-secure-app-access-on-google
-        from_address = "yourgmail@gmail.com"
-        to_address = "yourgmail@gmail.com"
-        server_address = "smtp.gmail.com"
-        port = ###  
-        username = "yourgmail@gmail.com"
-        password = "######"  # Remember to change to your password you received from the stackoverflow tutorial
-    
-        # Create the email
-        msg = MIMEMultipart()
-        msg["From"] = from_address
-        msg["To"] = to_address
-        msg["Subject"] = "Bug Report"
-        msg.attach(MIMEText(bug_report))
-    
-        # Connect to the server and send the email
         try:
-            server = smtplib.SMTP(server_address, port)
-            server.ehlo()  # Can be omitted
-            server.starttls()
-            server.login(username, password)
-            server.send_message(msg)
-            server.close()
-            return "Bug report submitted successfully."
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            formatted_message = f"{timestamp} - INFO - Bug Report: {bug_report}\n"
+            
+            # Write the bug report to the log file
+            with open(log_file, 'a') as f:
+                f.write(formatted_message)
+    
+            print(f"Logging bug report: {bug_report}")  # Debug print statement
+            self.response_text.setText("Bug report submitted successfully.")
+            
         except Exception as e:
-            return f"Failed to send bug report: {e}"
+            print(f"Failed to submit bug report: {e}")
+            self.response_text.setText("Failed to submit bug report. Please try again later.")
+            
+            
+            
+    def deactivate_bug_report_mode(self):
+        print("deactivate_bug_report_mode function called")
+        if self.bug_report_mode:
+            self.bug_report_mode = False
+            self.bug_report_button.setText('Bug Report')
+            self.input_line.setPlaceholderText("Welcome to Document Diglet! All queries go here.")
     
 
+        
 
+     
+        
+    def handle_ask_button(self, input_text):
+            self.deactivate_bug_report_mode()
+        # If MongoDB isn't running, return from the function
+            if not self.mongodb_running:
+                self.response_text.append("Please click the 'Start MongoDB' button before attempting to use any of the moves.")
+                return  
+            print("Handle ask button function called")
+            self.response_text.clear()  # Clear the output box
+            if input_text:
+                top_n = self.top_n_spinbox.value()
+                threshold = self.threshold_spinbox.value()
+        
+                # Use the existing connection if it is to the same collection
+                #if self.default_collection_name != self.default_collection.name:
+                    #self.default_collection = Bert_DocumentDiglet_NoInterpy_V30.connect_to_collection(self.default_db_name, self.default_collection_name)
+        
+                self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.ask_and_get_most_relevant, self.default_collection, input_text, top_n, threshold)
+                self.worker.result_ready.connect(self.handle_result)
+                self.worker.error_occurred.connect(self.handle_error)  # connect the new error signal to the error handler
+                self.worker.start()
+            else:
+                self.response_text.append("Hmmm. Not seeing anything in your request. Did you forget to type something inside the input field?")
+                print("Input field is empty. No query to process.")
+    
 
-    def handle_button(self, command_func):
-        print(f"{command_func.__name__} button clicked")
-        input_text = self.input_line.text()
+        
+    def handle_reveal_button(self):
+        self.deactivate_bug_report_mode()
+    # If MongoDB isn't running, return from the function
+        if not self.mongodb_running:
+            self.response_text.append("Please click the 'Start MongoDB' button before attempting to use any of the moves.")
+            return     
+        self.response_text.clear()  # Clear the output box
+        text = self.input_line.text()
+        flag = None
+        
+        # Check if the content from the main input line is a superpower command
+        if text.lower().startswith("superpower"):
+            self.handle_superpower_command(text)  # Run the superpower command
+            self.input_line.clear()  # clear the main input line
+            return  # exit the function early since we have handled the superpower command
+    
+        if text.strip() in ['-v']:  # check if '-v' or '-e' was inputted, and set flag accordingly
+            flag = text.strip()
         self.input_line.clear()
-
-        # Start a new worker thread
-        self.worker = Worker(command_func, input_text)
+    
+        self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.reveal_command, self.default_collection, flag)
         self.worker.result_ready.connect(self.handle_result)
+        self.worker.error_occurred.connect(self.handle_error)  # Added this line for error display
         self.worker.start()
 
-    def handle_result(self, result):
-        print(f"Result ready: {result}")
-        self.response_text.setText(str(result))
 
+       
+    '''    
+    def handle_search_button(self, text, collection):
+        # If MongoDB isn't running, return from the function
+            if not self.mongodb_running:
+                self.response_text.append("Please click the 'Start MongoDB' button before attempting to use any of the moves.")
+                return
+            self.response_text.clear()  # Clear the output box
+            self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.search_command, collection, text)
+            self.worker.result_ready.connect(self.handle_result)
+            self.worker.error_occurred.connect(self.handle_error)  # Added this line for error display
+            self.worker.start()
+         
+    '''
+    def handle_search_exact_button(self, text, collection):
+        # If MongoDB isn't running, return from the function
+        if not self.mongodb_running:
+            self.response_text.append("Please click the 'Start MongoDB' button before attempting to use any of the moves.")
+            return
+        self.response_text.clear()  # Clear the output box
+        self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.search_command_exact, collection, text)
+        self.worker.result_ready.connect(self.handle_result)
+        self.worker.error_occurred.connect(self.handle_error)  # Added this line for error display
+        self.worker.start()
+
+    def handle_search_near_button(self, text, collection):
+        # If MongoDB isn't running, return from the function
+        if not self.mongodb_running:
+            self.response_text.append("Please click the 'Start MongoDB' button before attempting to use any of the moves.")
+            return
+        self.response_text.clear()  # Clear the output box
+        self.worker = Worker(Bert_DocumentDiglet_NoInterpy_V30.search_command_near, collection, text)
+        self.worker.result_ready.connect(self.handle_result)
+        self.worker.error_occurred.connect(self.handle_error)  # Added this line for error display
+        self.worker.start()
+
+    def handle_input_line_return(self):
+        """
+        This function handles the return key pressed event on the input line.
+        """
+        input_text = self.input_line.text().strip()  # get the text from the input line
+        self.input_line.clear()  # clear the input line
+    
+        # Check if the input text is a superpower command
+        if input_text.lower().startswith("superpower"):
+            result = self.handle_superpower_command(input_text)
+            self.response_text.setText(result)  # update the response text with the result of the superpower command
+        else:
+            self.handle_ask_button(input_text)  # handle normally if it's not a superpower command
+
+    def handle_result(self, result):
+        if isinstance(result, list):
+            if result:
+                if "Learnings file is empty. No backup created." in result:
+                    self.response_text.append(result[0])
+                elif len(result) == 1 and result[0] == "No relevant documents found for your query. Try rephrasing your question and/or adjusting the relevance score.":
+                    self.response_text.append(result[0])
+                else:
+                    self.response_text.append("Loading complete.")
+                    self.response_text.append("The following content has been added to the MongoDB:")
+                    self.response_text.append("\n".join(result))
+            else:
+                self.response_text.append("No new content added to the MongoDB.")
+        elif isinstance(result, tuple) and result[0] == "ask_results":
+            self.response_text.append("\n".join(result[1]))
+        elif result:
+            self.response_text.append(result)
+        self.reveal_button.setEnabled(True)
+        self.search_near_button.setEnabled(True)
+        self.search_exact_button.setEnabled(True)
+        self.ask_button.setEnabled(True)
+    
+        
+        # This will auto move the text box to the bottom (auto scrolls down) when the mongo db is active
+       # QApplication.processEvents()  # process pending events
+      #  self.response_text.moveCursor(QTextCursor.End)
+ 
 
 def main():
+    print("main() function called")
     print("Running main function")
     app = QApplication(sys.argv)
     main_window = MainWindow()
@@ -256,4 +1011,6 @@ def main():
 
 if __name__ == '__main__':
     print("Executing script")
+    # Pyinstaller fix so it doesn't run 2x as an executable file
+    multiprocessing.freeze_support()
     main()
