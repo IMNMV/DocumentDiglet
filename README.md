@@ -1,87 +1,37 @@
-# DocumentDiglet
+The Document Diglet project is an offline program to search and retrieve specific sections of documents. Imagine having the ability to converse with your repository, asking complex questions, and receiving relevant excerpts in return.
 
-Project: Offline Semantic Document Search 
+At the core of this system, we're employing the MS MARCO Distillbert v4 model from Hugging Face (https://huggingface.co/sentence-transformers/msmarco-distilbert-base-v4). This model, designed specifically for information retrieval tasks, enables the creation of rich sentence embeddings that encapsulate the meaning and context of the text.
 
-*Note this description is outdated as of 8/14. Will make an update soon.
+By utilizing the sentence transformers library, Document Diglet processes the content of a document, breaking it down into sentences or sections, and computes corresponding embeddings for each part.
 
-This project aims to create an efficient, offline way to semantically search documents. It offers a streamlined approach to make any dynamic repository easily accessible to team members, surpassing the capabilities of simple keyword search functionalities like Ctrl+F or an FAQ.
+When a user issues a query or prompt, the system calculates the cosine similarity between the query's embedding and the embeddings of all stored sections. The top-matching sections, based on similarity, are returned to the user.
 
-By leveraging transformer models and cosine similarity, this project provides the ability to 'converse' with your documents, initiating an interactive and intelligent text exploration.
+Unlike many other semantic search tools that rely on cloud-based models and APIs, Document Diglet operates entirely offline. This ensures complete privacy and control over your documents.
+The system is designed to adapt to continually changing repositories, allowing team members to add, modify, or delete content as needed. This makes it suitable for a wide range of applications, from internal knowledge bases to personal document management within a simple GUI
 
-The project enhances privacy as it operates completely offline, ensuring no data is shared with external entities. It offers a unique combination of intelligent document retrieval and stringent data privacy.
-About Semantic Matching Transformers
+Document Diglet adds the next step to traditional search functionalities like Ctrl+F by offering semantic understanding. It doesn't just look for exact keyword matches; it understands the meaning behind your query and finds the most relevant sections, even if they are phrased differently.
 
-Transformers are a type of deep learning model that uses attention mechanisms to capture the context of words in a text and generate high-quality sentence embeddings. A 'semantic matching transformer' is trained to understand the semantic similarity between sentences.
+Framework and Architecture
 
-In this project, we're using the 'all-MiniLM-L6-v2' model from Hugging Face's model repository. MiniLM is a size-efficient transformer model that retains considerable language understanding capabilities. The 'all-MiniLM-L6-v2' model is specifically fine-tuned for creating sentence embeddings that can be compared for semantic similarity.
-Requirements
+The front-end Graphical User Interface (GUI) of the Document Diglet project is constructed using the PyQt5 library. This framework facilitates the creation of an interactive and responsive user interface.
+User Interaction Management
 
-    Python 3.9 or newer.
-    MongoDB. If not already installed, follow the instructions at MongoDB's official documentation.
+The GUI is equipped with specialized functionalities to manage user interactions:
 
-Installation and Setup
+    Query Handling: Functions such as handle_ask_button, handle_reveal_button, handle_search_button, and related handlers are devised to process various types of user queries and return pertinent excerpts.
+    Error Management: The handle_error function ensures robust error capture and notification, contributing to system stability.
+    Auxiliary Controls: Additional functions like handle_refresh_button, handle_help_button, and handle_bug_report_button provide supplementary controls for refreshing content, accessing help, and reporting bugs.
 
-    Download the Semantic Transformer Model:
+Database Integration
 
-    This project uses the 'all-MiniLM-L6-v2' transformer model to create sentence embeddings. You can download the model from the Hugging Face Model repository.
+The GUI's integration with MongoDB is manifested through several key functions:
 
-    Create a virtual environment (Optional but recommended):
-        Using venv: python -m venv myenv (You may need to use python3 instead of python depending on your system setup.)
-        Using conda: conda create -n myenv python=3.9
+    Connection Management: The toggle_mongodb function provides the ability to activate or deactivate the MongoDB connection, illustrating flexibility in database connectivity.
+    Collection Handling: Functions such as get_db_collection, update_last_used_collection, and get_last_used_collection facilitate meticulous management of database collections.
 
-    Activate the virtual environment:
-        Using venv:
-            Windows: myenv\Scripts\activate
-            Linux/MacOS: source myenv/bin/activate
-        Using conda: conda activate myenv
+Dynamic Responsiveness
 
-    Install required Python packages:
-        PyQt5: pip install pyqt5 or conda install -c anaconda pyqt
-        nltk: pip install nltk or conda install -c anaconda nltk
-            After installation, run the Python interpreter and execute: import nltk; nltk.download('punkt'); nltk.download('stopwords')
-        pymongo: pip install pymongo or conda install -c anaconda pymongo
-        sentence-transformers: pip install sentence-transformers or conda install -c conda-forge sentence-transformers
-        numpy: pip install numpy or conda install -c anaconda numpy
-        shutil (standard library in Python, no need to install separately)
-        subprocess (standard library in Python, no need to install separately)
+The GUI's dynamic responsiveness is evident in its ability to adapt to repository changes. Features such as the handle_refresh_button function support this adaptability.
+Privacy and Security Considerations
 
-    Prepare the Learning Data:
-
-    Create a plain text file named learnings.txt. Place this file in the appropriate directory based on your script's configuration. This file will be used to populate the knowledge base.
-
-Please adjust file and directory paths in the script as needed for your system setup.
-
-Usage
-
-Run the GUI script in your virtual environment:
-
-python gui_script.py
-
-The main interface includes an input line, several buttons for performing different commands, and a response box to view the results. Here is a brief rundown of what each part does:
-
-    Input Line: Enter your query or command here.
-
-    Response Box: The results of your query or command will appear here.
-
-    Dig Button: Executes the 'ask_command' function from the main script with the query entered in the input line.
-
-    Reveal Button: Executes the 'reveal_command' function from the main script with the query entered in the input line.
-
-    Eliminate Button: Executes the 'eliminate_command' function from the main script with the query entered in the input line.
-
-    Update Button: This is linked to two input lines labeled 'Original Content' and 'New Content'. The function 'update_command' is executed with these two input values as arguments.
-
-    Search Button: Executes the 'search_command' function from the main script with the query entered in the input line.
-
-    Refresh Button: Executes the 'compute_and_store_embedding_and_backup_learnings' function from the main script, which updates the data.
-
-Please refer to the 'DocumentDiglet_NoInterpy_V5' script documentation for a more in-depth description of what each command does.
-Contributing
-
-We welcome contributions from the community. Please read our contribution guide before making a pull request.
-License
-
-This project is licensed under the Apache license 2.0 - see the LICENSE.md file for details.
-Acknowledgments
-
-The 'Document Diglet' was developed by IMNMV & GPT-4.
+The offline operation of the GUI ensures user privacy and data integrity. Security-related functions like close_mongodb_if_active reflect the GUI's adherence to secure practices.
