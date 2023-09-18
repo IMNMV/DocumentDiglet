@@ -40,7 +40,7 @@ import torch
 # Allow users to change or add a new collection
 
 def connect_to_collection(db_name, collection_name):
-    client = MongoClient('mongodb://localhost:27019/')
+    client = MongoClient('mongodb://localhost:#####/')
     db = client[db_name]
     collection = db[collection_name]
     return collection
